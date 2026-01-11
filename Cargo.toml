@@ -1,0 +1,65 @@
+[package]
+name = "wasmcloud-operator-installer"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust CLI tool for installing the Wasmcloud Runtime Operator on Kubernetes"
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+repository = "https://github.com/rabelmervin/wasmcloud-operator-installer"
+keywords = ["wasmcloud", "kubernetes", "operator", "wasm", "installer"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Kubernetes client library
+kube = { version = "0.87", features = ["runtime", "derive", "client"] }
+k8s-openapi = { version = "0.20", features = ["v1_28"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# CLI framework
+clap = { version = "4.0", features = ["derive", "env", "color"] }
+
+# Path and file operations
+dirs = "5.0"
+
+# HTTP client for downloading manifests
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Progress bars and terminal UI
+indicatif = { version = "0.17", features = ["tokio"] }
+
+# Color output
+colored = "2.0"
+
+[dev-dependencies]
+# Testing utilities
+tempfile = "3.0"
+test-log = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+debug = true
+opt-level = 0
+
+[[bin]]
+name = "wasmcloud-installer"
+path = "src/main.rs"
