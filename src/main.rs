@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use tracing::{info, warn, debug};
 
 mod config;
-mod crds;
 mod error;
 mod install;
 mod kubernetes;
@@ -21,8 +20,9 @@ use validator::Validator;
 async fn main() -> Result<()> {
     let app = Command::new("wasmcloud-installer")
         .version("0.1.0")
+        .author("Your Name <your.email@example.com>")
         .about("Install Wasmcloud Runtime Operator on Kubernetes")
-        .long_about("A CLI tool that reads your kubeconfig and installs the Wasmcloud Runtime Operator with Custom Resource Definitions (CRDs) on your Kubernetes cluster")
+        .long_about("A CLI tool that reads your kubeconfig and installs the Wasmcloud Runtime Operator on your Kubernetes cluster")
         .arg(
             Arg::new("kubeconfig")
                 .short('k')
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         .arg(
             Arg::new("dry-run")
                 .long("dry-run")
-                .help("Show what would be installed without actually installing (includes CRDs)")
+                .help("Show what would be installed without actually installing")
                 .action(ArgAction::SetTrue)
         )
         .arg(
@@ -67,14 +67,6 @@ async fn main() -> Result<()> {
                 .help("Timeout for installation operations in seconds")
                 .default_value("300")
                 .action(ArgAction::Set)
-        )
-        .arg(
-            Arg::new("operator-image")
-                .long("operator-image")
-                .value_name("IMAGE")
-                .help("Container image for the wasmcloud operator")
-                .default_value("ghcr.io/wasmcloud/wasmcloud-operator:0.4.0")
-                .action(ArgAction::Set)
         );
 
     let matches = app.get_matches();
@@ -92,7 +84,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run(matches: clap::ArgMatches) -> Result<()> {
-    println!("{}", "Wasmcloud Operator Installer".cyan().bold());
+    println!("{}", "🚀 Wasmcloud Operator Installer".cyan().bold());
     println!("{}", "================================".cyan());
     println!();
 
@@ -102,11 +94,10 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     let dry_run = matches.get_flag("dry-run");
     let skip_validation = matches.get_flag("skip-validation");
     let timeout = matches.get_one::<String>("timeout").unwrap().parse::<u64>().unwrap_or(300);
-    let operator_image = matches.get_one::<String>("operator-image").unwrap();
 
     info!("Starting Wasmcloud operator installation");
-    debug!("Configuration: namespace={}, dry_run={}, skip_validation={}, timeout={}s, operator_image={}", 
-           namespace, dry_run, skip_validation, timeout, operator_image);
+    debug!("Configuration: namespace={}, dry_run={}, skip_validation={}, timeout={}s", 
+           namespace, dry_run, skip_validation, timeout);
 
     // Step 1: Load kubeconfig
     let config = load_kubeconfig(kubeconfig_path).await?;
@@ -114,7 +105,7 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     // Step 2: Create Kubernetes client
     let kube_client = create_kube_client(&config, kubeconfig_path).await?;
 
-    // Step 3: Run validation
+    // Step 3: Run validation (unless skipped)
     if !skip_validation {
         run_validation(&kube_client, namespace).await?;
     } else {
@@ -122,10 +113,10 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     }
 
     // Step 4: Install Wasmcloud operator
-    install_operator(&kube_client, namespace, dry_run, timeout, operator_image).await?;
+    install_operator(&kube_client, namespace, dry_run, timeout).await?;
 
     println!();
-    println!("{}", " Installation completed successfully!".green().bold());
+    println!("{}", "✅ Installation completed successfully!".green().bold());
     
     if !dry_run {
         println!("{}", format!("Wasmcloud operator is now running in namespace '{}'", namespace).green());
@@ -137,7 +128,7 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
 }
 
 async fn load_kubeconfig(kubeconfig_path: Option<&String>) -> Result<KubeConfig> {
-    println!("{}", " Loading kubeconfig...".blue().bold());
+    println!("{}", "📋 Loading kubeconfig...".blue().bold());
 
     let config = match kubeconfig_path {
         Some(path) => {
@@ -184,7 +175,7 @@ async fn create_kube_client(config: &KubeConfig, kubeconfig_path: Option<&String
 }
 
 async fn run_validation(client: &KubeClient, namespace: &str) -> Result<()> {
-    println!("{}", " Running validation checks...".blue().bold());
+    println!("{}", "🔍 Running validation checks...".blue().bold());
 
     let validator = Validator::new(client.client());
     
@@ -198,14 +189,14 @@ async fn run_validation(client: &KubeClient, namespace: &str) -> Result<()> {
     Ok(())
 }
 
-async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, timeout: u64, operator_image: &str) -> Result<()> {
+async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, timeout: u64) -> Result<()> {
     if dry_run {
-        println!("{}", " Dry run - showing what would be installed...".blue().bold());
+        println!("{}", "🔍 Dry run - showing what would be installed...".blue().bold());
     } else {
-        println!("{}", " Installing Wasmcloud operator...".blue().bold());
+        println!("{}", "📦 Installing Wasmcloud operator...".blue().bold());
     }
 
-    let installer = WasmcloudInstaller::new(client.client(), namespace, timeout, operator_image);
+    let installer = WasmcloudInstaller::new(client.client(), namespace, timeout);
     
     if dry_run {
         installer.dry_run().await?;
@@ -214,15 +205,10 @@ async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, t
         installer.install().await?;
         println!("   Installation: {}", "✓ Operator deployed".green());
         
-        // Check structural readiness first (fast validation)
-        println!("{}", " Checking structural readiness...".blue().bold());
-        installer.check_structural_readiness().await?;
-        println!("   Structural: {}", "✓ Deployment and CRDs exist".green());
-        
-        // Wait for operator to be actually running (the real requirement)
-        println!("{}", " Waiting for operator to be running...".blue().bold());
+        // Wait for deployment to be ready
+        println!("{}", "⏳ Waiting for operator to be ready...".blue().bold());
         installer.wait_for_ready().await?;
-        println!("   Status: {}", "✓ Operator is running and ready".green());
+        println!("   Status: {}", "✓ Operator is running".green());
     }
     
     Ok(())
