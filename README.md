@@ -29,6 +29,16 @@ cargo build --release
 ./target/release/wasmcloud-installer --help
 ```
 
+### Create a Kubernetes Cluster
+
+```bash
+# Create a kind cluster for wasmCloud
+kind create cluster --name wasmcloud-cluster
+
+# Verify cluster is running
+kubectl cluster-info --context wasmcloud-cluster
+```
+
 ## Usage
 
 ### Installation Examples
@@ -38,7 +48,7 @@ cargo build --release
 ./target/release/wasmcloud-installer
 
 # Specify custom kubeconfig
-./target/release/wasmcloud-installer --kubeconfig ~/.kube/prod-cluster
+./target/release/wasmcloud-installer --kubeconfig ~/.kube/config
 
 # Define custom namespace
 ./target/release/wasmcloud-installer --namespace wasmcloud-system
@@ -50,11 +60,7 @@ cargo build --release
 ./target/release/wasmcloud-installer --verbose
 
 # Complete example with all options
-./target/release/wasmcloud-installer \
-  --kubeconfig ~/.kube/my-cluster \
-  --namespace wasmcloud-prod \
-  --timeout 600 \
-  --verbose
+./target/release/wasmcloud-installer --kubeconfig ~/.kube/config --namespace wasmcloud-demo
 ```
 
 ## CLI Options

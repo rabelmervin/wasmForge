@@ -5,7 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use k8s_openapi::api::{
     apps::v1::{Deployment, DeploymentSpec, ReplicaSet},
     core::v1::{
-        Container, ContainerPort, Namespace, Pod, PodSpec, PodTemplateSpec, Service, ServiceAccount, ServicePort,
+        Container, ContainerPort, Namespace, PodSpec, PodTemplateSpec, Service, ServiceAccount, ServicePort,
         ServiceSpec,
     },
     rbac::v1::{ClusterRole, ClusterRoleBinding, PolicyRule, RoleRef, Subject},

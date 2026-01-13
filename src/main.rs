@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn, debug};
 
 mod config;
+mod crds;
 mod error;
 mod install;
 mod kubernetes;
@@ -196,7 +197,7 @@ async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, t
         println!("{}", "📦 Installing Wasmcloud operator...".blue().bold());
     }
 
-    let installer = WasmcloudInstaller::new(client.client(), namespace, timeout);
+    let installer = WasmcloudInstaller::new(client.client(), namespace, timeout, "ghcr.io/wasmcloud/wasmcloud-operator:latest");
     
     if dry_run {
         installer.dry_run().await?;
