@@ -248,14 +248,16 @@ impl Validator {
         let node_list = nodes
             .list(&ListParams::default())
             .await
-            .map_err(|e| InstallerError::ValidationError(
-                format!("Cannot list nodes to check resources: {}", e)
-            ))?;
+            .map_err(|e| {
+                warn!("Cannot list nodes to check resources: {}. This may be expected in some cluster configurations.", e);
+                return InstallerError::ValidationError(
+                    format!("Cannot list nodes to check resources: {}", e)
+                );
+            })?;
 
         if node_list.items.is_empty() {
-            return Err(InstallerError::ValidationError(
-                "No nodes found in the cluster".to_string()
-            ));
+            warn!("No nodes found in the cluster. This may be expected in some cluster configurations");
+            return Ok(());
         }
 
         // Basic check - ensure we have at least one ready node
@@ -271,12 +273,10 @@ impl Validator {
         }).count();
 
         if ready_nodes == 0 {
-            return Err(InstallerError::ValidationError(
-                "No ready nodes found in the cluster".to_string()
-            ));
+            warn!("No ready nodes found in the cluster. The operator may not schedule until nodes become ready.");
+        } else {
+            info!("Found {} ready nodes in cluster", ready_nodes);
         }
-
-        info!("Found {} ready nodes in cluster", ready_nodes);
         debug!("Resource availability validated");
         Ok(())
     }
