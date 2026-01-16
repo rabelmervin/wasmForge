@@ -35,16 +35,16 @@ impl Validator {
 
         info!("Connected to Kubernetes API server version: {}.{}", version.major, version.minor);
 
-        // Check if we can list nodes 
+        // Check if we can list nodes (may not be accessible in managed clusters)
         let nodes: Api<Node> = Api::all(self.client.clone());
-        let node_list = nodes
-            .list(&ListParams::default().limit(1))
-            .await
-            .map_err(|e| InstallerError::ValidationError(
-                format!("Cannot list cluster nodes: {}", e)
-            ))?;
-
-        info!("Cluster has {} nodes", node_list.items.len());
+        match nodes.list(&ListParams::default().limit(1)).await {
+            Ok(node_list) => {
+                info!("Cluster has {} nodes", node_list.items.len());
+            }
+            Err(e) => {
+                warn!("Cannot list nodes ({}). This is normal for managed Kubernetes clusters", e);
+            }
+        }
 
         // Validate Kubernetes version compatibility
         self.validate_kubernetes_version(&version)?;
@@ -245,38 +245,39 @@ impl Validator {
         debug!("Validating resource availability");
 
         let nodes: Api<Node> = Api::all(self.client.clone());
-        let node_list = nodes
-            .list(&ListParams::default())
-            .await
-            .map_err(|e| InstallerError::ValidationError(
-                format!("Cannot list nodes to check resources: {}", e)
-            ))?;
+        
+        // Try to list nodes, but don't fail if we can't (some managed clusters restrict node access)
+        match nodes.list(&ListParams::default()).await {
+            Ok(node_list) => {
+                if node_list.items.is_empty() {
+                    warn!("No nodes visible in the cluster (this may be normal for managed/serverless clusters)");
+                    info!("Skipping node readiness check - cluster may be serverless or node access may be restricted");
+                } else {
+                    // Basic check - ensure we have at least one ready node
+                    let ready_nodes = node_list.items.iter().filter(|node| {
+                        if let Some(status) = &node.status {
+                            if let Some(conditions) = &status.conditions {
+                                return conditions.iter().any(|condition| {
+                                    condition.type_ == "Ready" && condition.status == "True"
+                                });
+                            }
+                        }
+                        false
+                    }).count();
 
-        if node_list.items.is_empty() {
-            return Err(InstallerError::ValidationError(
-                "No nodes found in the cluster".to_string()
-            ));
-        }
-
-        // Basic check - ensure we have at least one ready node
-        let ready_nodes = node_list.items.iter().filter(|node| {
-            if let Some(status) = &node.status {
-                if let Some(conditions) = &status.conditions {
-                    return conditions.iter().any(|condition| {
-                        condition.type_ == "Ready" && condition.status == "True"
-                    });
+                    if ready_nodes == 0 {
+                        warn!("No ready nodes found in the cluster - workloads may not be schedulable");
+                    } else {
+                        info!("Found {} ready nodes in cluster", ready_nodes);
+                    }
                 }
             }
-            false
-        }).count();
-
-        if ready_nodes == 0 {
-            return Err(InstallerError::ValidationError(
-                "No ready nodes found in the cluster".to_string()
-            ));
+            Err(e) => {
+                warn!("Cannot list nodes ({}). This is normal for managed Kubernetes clusters with restricted RBAC", e);
+                info!("Skipping node validation - assuming cluster can schedule workloads");
+            }
         }
 
-        info!("Found {} ready nodes in cluster", ready_nodes);
         debug!("Resource availability validated");
         Ok(())
     }

@@ -114,15 +114,15 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     }
 
     // Step 4: Install Wasmcloud operator
-    install_operator(&kube_client, namespace, dry_run, timeout).await?;
+    let installer = install_operator(&kube_client, namespace, dry_run, timeout).await?;
 
-    println!();
-    println!("{}", "✅ Installation completed successfully!".green().bold());
-    
+    // Step 5: Show installation summary
     if !dry_run {
-        println!("{}", format!("Wasmcloud operator is now running in namespace '{}'", namespace).green());
-        println!("{}", "You can check the status with:".dimmed());
-        println!("{}", format!("  kubectl get pods -n {}", namespace).dimmed());
+        installer.print_installation_summary().await?;
+    } else {
+        println!();
+        println!("{}", "✅ Dry run completed successfully!".green().bold());
+        println!("{}", "No resources were created.".dimmed());
     }
 
     Ok(())
@@ -190,7 +190,7 @@ async fn run_validation(client: &KubeClient, namespace: &str) -> Result<()> {
     Ok(())
 }
 
-async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, timeout: u64) -> Result<()> {
+async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, timeout: u64) -> Result<WasmcloudInstaller> {
     if dry_run {
         println!("{}", "🔍 Dry run - showing what would be installed...".blue().bold());
     } else {
@@ -212,7 +212,7 @@ async fn install_operator(client: &KubeClient, namespace: &str, dry_run: bool, t
         println!("   Status: {}", "✓ Operator is running".green());
     }
     
-    Ok(())
+    Ok(installer)
 }
 
 fn init_logging() -> Result<()> {

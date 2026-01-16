@@ -292,6 +292,147 @@ impl WasmcloudInstaller {
         }
     }
 
+    /// Print installation summary showing what was created and what's running
+    pub async fn print_installation_summary(&self) -> InstallerResult<()> {
+        use k8s_openapi::api::core::v1::Pod;
+        use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+
+        println!();
+        println!("{}", " Installation Summary".cyan().bold());
+        println!("{}", "=====================".cyan());
+        println!();
+
+        // Check namespace
+        let namespaces: Api<Namespace> = Api::all(self.client.clone());
+        match namespaces.get(&self.namespace).await {
+            Ok(_) => println!("   {} Namespace: {}", "✓".green(), self.namespace.yellow()),
+            Err(_) => println!("   {} Namespace: {}", "✗".red(), self.namespace.yellow()),
+        }
+
+        // Check CRDs
+        let crds: Api<CustomResourceDefinition> = Api::all(self.client.clone());
+        let crd_names = vec![
+            ("wasmcloudhostconfigs.core.wasmcloud.dev", "WasmCloudHostConfig"),
+            ("wasmcloudapplications.core.wasmcloud.dev", "WasmCloudApplication"),
+        ];
+        
+        let mut crd_ready_count = 0;
+        for (crd_name, display_name) in &crd_names {
+            match crds.get(crd_name).await {
+                Ok(crd) => {
+                    let is_ready = crd.status.as_ref()
+                        .and_then(|s| s.conditions.as_ref())
+                        .map(|conditions| conditions.iter().any(|c| c.type_ == "Established" && c.status == "True"))
+                        .unwrap_or(false);
+                    
+                    if is_ready {
+                        println!("   {} CRD: {}", "✓".green(), display_name.yellow());
+                        crd_ready_count += 1;
+                    } else {
+                        println!("   {} CRD: {} (not ready)", "⚠".yellow(), display_name.yellow());
+                    }
+                }
+                Err(_) => println!("   {} CRD: {}", "✗".red(), display_name.yellow()),
+            }
+        }
+
+        // Check ServiceAccount
+        let service_accounts: Api<ServiceAccount> = Api::namespaced(self.client.clone(), &self.namespace);
+        match service_accounts.get("wasmcloud-operator").await {
+            Ok(_) => println!("   {} ServiceAccount: wasmcloud-operator", "✓".green()),
+            Err(_) => println!("   {} ServiceAccount: wasmcloud-operator", "✗".red()),
+        }
+
+        // Check ClusterRole
+        let cluster_roles: Api<ClusterRole> = Api::all(self.client.clone());
+        match cluster_roles.get("wasmcloud-operator").await {
+            Ok(_) => println!("   {} ClusterRole: wasmcloud-operator", "✓".green()),
+            Err(_) => println!("   {} ClusterRole: wasmcloud-operator", "✗".red()),
+        }
+
+        // Check ClusterRoleBinding
+        let cluster_role_bindings: Api<ClusterRoleBinding> = Api::all(self.client.clone());
+        match cluster_role_bindings.get("wasmcloud-operator").await {
+            Ok(_) => println!("   {} ClusterRoleBinding: wasmcloud-operator", "✓".green()),
+            Err(_) => println!("   {} ClusterRoleBinding: wasmcloud-operator", "✗".red()),
+        }
+
+        // Check Deployment
+        let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        let mut deployment_ready = false;
+        match deployments.get("wasmcloud-operator").await {
+            Ok(deployment) => {
+                if let Some(status) = &deployment.status {
+                    let desired = status.replicas.unwrap_or(0);
+                    let ready = status.ready_replicas.unwrap_or(0);
+                    deployment_ready = desired > 0 && ready == desired;
+                    
+                    if deployment_ready {
+                        println!("   {} Deployment: wasmcloud-operator ({}/{})", "✓".green(), ready, desired);
+                    } else {
+                        println!("   {} Deployment: wasmcloud-operator ({}/{}) - not ready", "⚠".yellow(), ready, desired);
+                    }
+                } else {
+                    println!("   {} Deployment: wasmcloud-operator (status unknown)", "⚠".yellow());
+                }
+            }
+            Err(_) => println!("   {} Deployment: wasmcloud-operator", "✗".red()),
+        }
+
+        // Check Pods
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
+        let list_params = ListParams::default().labels("app=wasmcloud-operator");
+        match pods.list(&list_params).await {
+            Ok(pod_list) => {
+                if pod_list.items.is_empty() {
+                    println!("   {} Pods: No pods found", "⚠".yellow());
+                } else {
+                    for pod in &pod_list.items {
+                        let pod_name = pod.metadata.name.as_deref().unwrap_or("unknown");
+                        if let Some(status) = &pod.status {
+                            let phase = status.phase.as_deref().unwrap_or("Unknown");
+                            match phase {
+                                "Running" => println!("   {} Pod: {} (Running)", "✓".green(), pod_name.cyan()),
+                                "Pending" => println!("   {} Pod: {} (Pending)", "⚠".yellow(), pod_name.cyan()),
+                                "Failed" => println!("   {} Pod: {} (Failed)", "✗".red(), pod_name.cyan()),
+                                _ => println!("   {} Pod: {} ({})", "•".blue(), pod_name.cyan(), phase),
+                            }
+                        } else {
+                            println!("   {} Pod: {} (status unknown)", "•".blue(), pod_name.cyan());
+                        }
+                    }
+                }
+            }
+            Err(e) => println!("   {} Pods: Failed to list - {}", "✗".red(), e),
+        }
+
+        // Check Service
+        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        match services.get("wasmcloud-operator").await {
+            Ok(_) => println!("   {} Service: wasmcloud-operator", "✓".green()),
+            Err(_) => println!("   {} Service: wasmcloud-operator", "✗".red()),
+        }
+
+        println!();
+        
+        // Final status assessment
+        if deployment_ready && crd_ready_count == crd_names.len() {
+            println!("{}", "✅ All components are ready and running!".green().bold());
+        } else {
+            println!("{}", " Some components are not ready yet. This may take a few moments.".yellow().bold());
+            println!();
+            println!("{}", "Troubleshooting:".cyan().bold());
+            println!("   Check pod status: kubectl get pods -n {}", self.namespace);
+            println!("   View logs: kubectl logs -n {} -l app=wasmcloud-operator", self.namespace);
+            println!("   Describe deployment: kubectl describe deployment wasmcloud-operator -n {}", self.namespace);
+        }
+
+        println!();
+        println!("{}", "📚 Learn more: https://docs.wasmcloud.com".dimmed());
+
+        Ok(())
+    }
+
     /// Get detailed failure information from pods
     async fn get_pod_failure_details(&self) -> String {
         use k8s_openapi::api::core::v1::Pod;
