@@ -277,7 +277,6 @@ impl Validator {
                 info!("Skipping node validation - assuming cluster can schedule workloads");
             }
         }
-
         debug!("Resource availability validated");
         Ok(())
     }

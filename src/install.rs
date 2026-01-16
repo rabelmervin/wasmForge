@@ -428,7 +428,7 @@ impl WasmcloudInstaller {
         }
 
         println!();
-        println!("{}", "📚 Learn more: https://docs.wasmcloud.com".dimmed());
+        println!("{}", "📚 Learn more: https://wasmcloud.com/".dimmed());
 
         Ok(())
     }
