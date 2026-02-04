@@ -20,7 +20,140 @@ use kube::{
 };
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone)]
+pub struct InstallationStatus {
+    pub namespace_exists: bool,
+    pub namespace_name: String,
+    pub deployment_exists: bool,
+    pub deployment_ready: bool,
+    pub deployment_replicas: Option<(i32, i32)>, // (ready, desired)
+    pub service_exists: bool,
+    pub service_account_exists: bool,
+    pub cluster_role_exists: bool,
+    pub cluster_role_binding_exists: bool,
+    pub crds_installed: Vec<String>,
+    pub crds_missing: Vec<String>,
+    pub pod_status: Vec<String>,
+    pub overall_status: OverallStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OverallStatus {
+    NotInstalled,
+    PartiallyInstalled,
+    InstalledNotReady,
+    InstalledAndReady,
+}
+
+impl InstallationStatus {
+    pub fn print_status_report(&self) {
+        use colored::*;
+
+        println!("{}", format!("📊 Installation Status for namespace: {}", self.namespace_name).bold());
+        println!("{}", "=".repeat(50));
+        println!();
+
+        // Overall status
+        let status_icon = match self.overall_status {
+            OverallStatus::NotInstalled => "✗",
+            OverallStatus::PartiallyInstalled => "⚠️",
+            OverallStatus::InstalledNotReady => "🔄",
+            OverallStatus::InstalledAndReady => "✓",
+        };
+        
+        let status_text = match self.overall_status {
+            OverallStatus::NotInstalled => "Not Installed".red(),
+            OverallStatus::PartiallyInstalled => "Partially Installed".yellow(),
+            OverallStatus::InstalledNotReady => "Installed (Not Ready)".yellow(),
+            OverallStatus::InstalledAndReady => "Installed and Ready".green(),
+        };
+
+        println!("{} Overall Status: {}", status_icon, status_text.bold());
+        println!();
+
+        // Namespace status
+        let ns_icon = if self.namespace_exists { "✓" } else { "✗" };
+        println!("{} Namespace: {}", ns_icon, self.namespace_name);
+
+        // Deployment status
+        let deploy_icon = if self.deployment_exists {
+            if self.deployment_ready { "✓" } else { "🔄" }
+        } else { "✗" };
+        
+        let deploy_status = if self.deployment_exists {
+            if let Some((ready, desired)) = self.deployment_replicas {
+                format!("wasmcloud-operator ({}/{})", ready, desired)
+            } else {
+                "wasmcloud-operator (status unknown)".to_string()
+            }
+        } else {
+            "Not found".to_string()
+        };
+        println!("{} Deployment: {}", deploy_icon, deploy_status);
+
+        // Pod status
+        if !self.pod_status.is_empty() {
+            for pod in &self.pod_status {
+                println!("   └─ Pod: {}", pod);
+            }
+        }
+
+        // Service status  
+        let svc_icon = if self.service_exists { "✓" } else { "✗" };
+        println!("{} Service: {}", svc_icon, if self.service_exists { "wasmcloud-operator" } else { "Not found" });
+
+        // RBAC status
+        println!();
+        println!("RBAC Resources:");
+        let sa_icon = if self.service_account_exists { "✓" } else { "✗" };
+        println!("   {} ServiceAccount: {}", sa_icon, if self.service_account_exists { "wasmcloud-operator" } else { "Not found" });
+        
+        let cr_icon = if self.cluster_role_exists { "✓" } else { "✗" };
+        println!("   {} ClusterRole: {}", cr_icon, if self.cluster_role_exists { "wasmcloud-operator" } else { "Not found" });
+        
+        let crb_icon = if self.cluster_role_binding_exists { "✓" } else { "✗" };
+        println!("   {} ClusterRoleBinding: {}", crb_icon, if self.cluster_role_binding_exists { "wasmcloud-operator" } else { "Not found" });
+
+        // CRDs status
+        println!();
+        println!("Custom Resource Definitions:");
+        if !self.crds_installed.is_empty() {
+            for crd in &self.crds_installed {
+                println!("   ✓ {}", crd);
+            }
+        }
+        if !self.crds_missing.is_empty() {
+            for crd in &self.crds_missing {
+                println!("   ✗ {} (missing)", crd);
+            }
+        }
+
+        println!();
+        
+        // Recommendations
+        match self.overall_status {
+            OverallStatus::NotInstalled => {
+                println!("{}", "💡 Recommendations:".bold());
+                println!("   • Run installation: ./wasmcloud-installer --namespace {}", self.namespace_name);
+            }
+            OverallStatus::PartiallyInstalled => {
+                println!("{}", "💡 Recommendations:".bold());
+                println!("   • Complete installation: ./wasmcloud-installer --upgrade --namespace {}", self.namespace_name);
+                println!("   • Or clean up: ./wasmcloud-installer --uninstall --namespace {}", self.namespace_name);
+            }
+            OverallStatus::InstalledNotReady => {
+                println!("{}", "💡 Recommendations:".bold());
+                println!("   • Check pod logs: kubectl logs -n {} deployment/wasmcloud-operator", self.namespace_name);
+                println!("   • Try upgrade: ./wasmcloud-installer --upgrade --namespace {}", self.namespace_name);
+            }
+            OverallStatus::InstalledAndReady => {
+                println!("{}", "🎉 Installation is healthy and ready!".green().bold());
+            }
+        }
+    }
+}
 
 /// Wasmcloud operator installer
 pub struct WasmcloudInstaller {
@@ -417,7 +550,7 @@ impl WasmcloudInstaller {
         
         // Final status assessment
         if deployment_ready && crd_ready_count == crd_names.len() {
-            println!("{}", "✅ All components are ready and running!".green().bold());
+            println!("{}", "✓ All components are ready and running!".green().bold());
         } else {
             println!("{}", " Some components are not ready yet. This may take a few moments.".yellow().bold());
             println!();
@@ -885,6 +1018,464 @@ impl WasmcloudInstaller {
             }),
             status: None,
         }
+    }
+
+    /// Uninstall the Wasmcloud operator and all related resources
+    pub async fn uninstall(&self) -> InstallerResult<()> {
+        info!("Uninstalling Wasmcloud operator from namespace: {}", self.namespace);
+
+        // Create progress bar (7 steps)
+        let pb = ProgressBar::new(7);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("   {spinner:.red} [{bar:40.red/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        // Step 1: Delete deployment
+        pb.set_message("Deleting deployment...");
+        self.delete_deployment().await?;
+        pb.inc(1);
+
+        // Step 2: Delete service
+        pb.set_message("Deleting service...");
+        self.delete_service().await?;
+        pb.inc(1);
+
+        // Step 3: Delete cluster role binding
+        pb.set_message("Deleting cluster role binding...");
+        self.delete_cluster_role_binding().await?;
+        pb.inc(1);
+
+        // Step 4: Delete cluster role
+        pb.set_message("Deleting cluster role...");
+        self.delete_cluster_role().await?;
+        pb.inc(1);
+
+        // Step 5: Delete service account
+        pb.set_message("Deleting service account...");
+        self.delete_service_account().await?;
+        pb.inc(1);
+
+        // Step 6: Delete CRDs
+        pb.set_message("Deleting Custom Resource Definitions...");
+        self.delete_crds().await?;
+        pb.inc(1);
+
+        // Step 7: Delete namespace (optional - only if empty)
+        pb.set_message("Checking namespace cleanup...");
+        self.cleanup_namespace().await?;
+        pb.inc(1);
+
+        pb.finish_with_message("Uninstallation complete");
+        
+        Ok(())
+    }
+
+    /// Upgrade the Wasmcloud operator
+    pub async fn upgrade(&self) -> InstallerResult<()> {
+        info!("Upgrading Wasmcloud operator in namespace: {}", self.namespace);
+
+        // Create progress bar (6 steps)
+        let pb = ProgressBar::new(6);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("   {spinner:.yellow} [{bar:40.yellow/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        // Step 1: Update CRDs
+        pb.set_message("Updating Custom Resource Definitions...");
+        self.create_crds().await?;
+        pb.inc(1);
+
+        // Step 2: Update cluster role
+        pb.set_message("Updating cluster role...");
+        self.create_cluster_role().await?;
+        pb.inc(1);
+
+        // Step 3: Update cluster role binding
+        pb.set_message("Updating cluster role binding...");
+        self.create_cluster_role_binding().await?;
+        pb.inc(1);
+
+        // Step 4: Update deployment
+        pb.set_message("Updating deployment...");
+        self.update_deployment().await?;
+        pb.inc(1);
+
+        // Step 5: Update service
+        pb.set_message("Updating service...");
+        self.create_service().await?;
+        pb.inc(1);
+
+        // Step 6: Wait for CRDs to be ready
+        pb.set_message("Waiting for CRDs to be ready...");
+        self.wait_for_crds_ready().await?;
+        pb.inc(1);
+
+        pb.finish_with_message("Upgrade complete");
+        
+        Ok(())
+    }
+
+    /// Delete deployment
+    async fn delete_deployment(&self) -> InstallerResult<()> {
+        let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        
+        match deployments.delete("wasmcloud-operator", &DeleteParams::default()).await {
+            Ok(_) => {
+                debug!("Deleted deployment: wasmcloud-operator");
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                debug!("Deployment wasmcloud-operator not found, skipping");
+                Ok(())
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to delete deployment: {}", e)
+            )),
+        }
+    }
+
+    /// Delete service
+    async fn delete_service(&self) -> InstallerResult<()> {
+        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        
+        match services.delete("wasmcloud-operator", &DeleteParams::default()).await {
+            Ok(_) => {
+                debug!("Deleted service: wasmcloud-operator");
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                debug!("Service wasmcloud-operator not found, skipping");
+                Ok(())
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to delete service: {}", e)
+            )),
+        }
+    }
+
+    /// Delete cluster role binding
+    async fn delete_cluster_role_binding(&self) -> InstallerResult<()> {
+        let cluster_role_bindings: Api<ClusterRoleBinding> = Api::all(self.client.clone());
+        
+        match cluster_role_bindings.delete("wasmcloud-operator", &DeleteParams::default()).await {
+            Ok(_) => {
+                debug!("Deleted cluster role binding: wasmcloud-operator");
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                debug!("Cluster role binding wasmcloud-operator not found, skipping");
+                Ok(())
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to delete cluster role binding: {}", e)
+            )),
+        }
+    }
+
+    /// Delete cluster role
+    async fn delete_cluster_role(&self) -> InstallerResult<()> {
+        let cluster_roles: Api<ClusterRole> = Api::all(self.client.clone());
+        
+        match cluster_roles.delete("wasmcloud-operator", &DeleteParams::default()).await {
+            Ok(_) => {
+                debug!("Deleted cluster role: wasmcloud-operator");
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                debug!("Cluster role wasmcloud-operator not found, skipping");
+                Ok(())
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to delete cluster role: {}", e)
+            )),
+        }
+    }
+
+    /// Delete service account
+    async fn delete_service_account(&self) -> InstallerResult<()> {
+        let service_accounts: Api<ServiceAccount> = Api::namespaced(self.client.clone(), &self.namespace);
+        
+        match service_accounts.delete("wasmcloud-operator", &DeleteParams::default()).await {
+            Ok(_) => {
+                debug!("Deleted service account: wasmcloud-operator");
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                debug!("Service account wasmcloud-operator not found, skipping");
+                Ok(())
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to delete service account: {}", e)
+            )),
+        }
+    }
+
+    /// Delete CRDs
+    async fn delete_crds(&self) -> InstallerResult<()> {
+        let crd_installer = CrdInstaller::new(&self.client);
+        crd_installer.delete_crds().await
+    }
+
+    /// Cleanup namespace if it's empty and was created by us
+    async fn cleanup_namespace(&self) -> InstallerResult<()> {
+        let namespaces: Api<Namespace> = Api::all(self.client.clone());
+        
+        // Check if namespace has our label (indicating we created it)
+        match namespaces.get(&self.namespace).await {
+            Ok(ns) => {
+                if let Some(labels) = &ns.metadata.labels {
+                    if labels.get("app.kubernetes.io/managed-by") == Some(&"wasmcloud-installer".to_string()) {
+                        // Check if namespace is empty (no other resources)
+                        if self.is_namespace_empty().await? {
+                            match namespaces.delete(&self.namespace, &DeleteParams::default()).await {
+                                Ok(_) => {
+                                    debug!("Deleted namespace: {}", self.namespace);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to delete namespace {}: {}", self.namespace, e);
+                                }
+                            }
+                        } else {
+                            debug!("Namespace {} contains other resources, keeping it", self.namespace);
+                        }
+                    } else {
+                        debug!("Namespace {} not created by installer, keeping it", self.namespace);
+                    }
+                }
+            }
+            Err(_) => {
+                debug!("Namespace {} not found or not accessible", self.namespace);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Check if namespace is empty (contains no resources other than defaults)
+    async fn is_namespace_empty(&self) -> InstallerResult<bool> {
+        use kube::api::ListParams;
+        
+        // Check for pods
+        let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(self.client.clone(), &self.namespace);
+        if pods.list(&ListParams::default()).await?.items.len() > 0 {
+            return Ok(false);
+        }
+        
+        // Check for services (excluding default kubernetes service)
+        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        let service_list = services.list(&ListParams::default()).await?;
+        let non_default_services = service_list.items.iter()
+            .filter(|s| s.metadata.name.as_ref() != Some(&"kubernetes".to_string()))
+            .count();
+        if non_default_services > 0 {
+            return Ok(false);
+        }
+        
+        // Check for deployments
+        let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        if deployments.list(&ListParams::default()).await?.items.len() > 0 {
+            return Ok(false);
+        }
+        
+        Ok(true)
+    }
+
+    /// Update deployment (for upgrade operation)
+    async fn update_deployment(&self) -> InstallerResult<()> {
+        let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        let deployment = self.create_deployment_manifest();
+        
+        match deployments.get("wasmcloud-operator").await {
+            Ok(_) => {
+                // Deployment exists, update it
+                match deployments.replace("wasmcloud-operator", &PostParams::default(), &deployment).await {
+                    Ok(_) => {
+                        debug!("Updated deployment: wasmcloud-operator");
+                        Ok(())
+                    }
+                    Err(e) => Err(InstallerError::InstallationError(
+                        format!("Failed to update deployment: {}", e)
+                    )),
+                }
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                // Deployment doesn't exist, create it
+                self.create_deployment().await
+            }
+            Err(e) => Err(InstallerError::InstallationError(
+                format!("Failed to check deployment status: {}", e)
+            )),
+        }
+    }
+
+    /// Check the current installation status of wasmCloud operator
+    pub async fn check_installation_status(&self) -> InstallerResult<InstallationStatus> {
+        info!("Checking wasmCloud operator installation status in namespace: {}", self.namespace);
+
+        let mut status = InstallationStatus {
+            namespace_exists: false,
+            namespace_name: self.namespace.clone(),
+            deployment_exists: false,
+            deployment_ready: false,
+            deployment_replicas: None,
+            service_exists: false,
+            service_account_exists: false,
+            cluster_role_exists: false,
+            cluster_role_binding_exists: false,
+            crds_installed: Vec::new(),
+            crds_missing: Vec::new(),
+            pod_status: Vec::new(),
+            overall_status: OverallStatus::NotInstalled,
+        };
+
+        // Check namespace
+        let namespaces: Api<Namespace> = Api::all(self.client.clone());
+        match namespaces.get(&self.namespace).await {
+            Ok(_) => {
+                status.namespace_exists = true;
+                debug!("Namespace {} exists", self.namespace);
+            }
+            Err(_) => {
+                debug!("Namespace {} does not exist", self.namespace);
+            }
+        }
+
+        // Check deployment
+        let deployments: Api<Deployment> = Api::namespaced(self.client.clone(), &self.namespace);
+        match deployments.get("wasmcloud-operator").await {
+            Ok(deployment) => {
+                status.deployment_exists = true;
+                debug!("Deployment wasmcloud-operator exists");
+
+                if let Some(deploy_status) = &deployment.status {
+                    let ready_replicas = deploy_status.ready_replicas.unwrap_or(0);
+                    let desired_replicas = deployment.spec.as_ref()
+                        .and_then(|spec| spec.replicas)
+                        .unwrap_or(1);
+                    
+                    status.deployment_replicas = Some((ready_replicas, desired_replicas));
+                    status.deployment_ready = ready_replicas > 0 && ready_replicas == desired_replicas;
+                }
+
+                // Check pod status
+                let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(self.client.clone(), &self.namespace);
+                if let Ok(pod_list) = pods.list(&ListParams::default().labels("app=wasmcloud-operator")).await {
+                    for pod in pod_list.items {
+                        let pod_name = pod.metadata.name.unwrap_or_else(|| "unknown".to_string());
+                        let phase = pod.status.as_ref()
+                            .and_then(|s| s.phase.clone())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        status.pod_status.push(format!("{} ({})", pod_name, phase));
+                    }
+                }
+            }
+            Err(_) => {
+                debug!("Deployment wasmcloud-operator does not exist");
+            }
+        }
+
+        // Check service
+        let services: Api<Service> = Api::namespaced(self.client.clone(), &self.namespace);
+        match services.get("wasmcloud-operator").await {
+            Ok(_) => {
+                status.service_exists = true;
+                debug!("Service wasmcloud-operator exists");
+            }
+            Err(_) => {
+                debug!("Service wasmcloud-operator does not exist");
+            }
+        }
+
+        // Check service account
+        let service_accounts: Api<ServiceAccount> = Api::namespaced(self.client.clone(), &self.namespace);
+        match service_accounts.get("wasmcloud-operator").await {
+            Ok(_) => {
+                status.service_account_exists = true;
+                debug!("ServiceAccount wasmcloud-operator exists");
+            }
+            Err(_) => {
+                debug!("ServiceAccount wasmcloud-operator does not exist");
+            }
+        }
+
+        // Check cluster role
+        let cluster_roles: Api<ClusterRole> = Api::all(self.client.clone());
+        match cluster_roles.get("wasmcloud-operator").await {
+            Ok(_) => {
+                status.cluster_role_exists = true;
+                debug!("ClusterRole wasmcloud-operator exists");
+            }
+            Err(_) => {
+                debug!("ClusterRole wasmcloud-operator does not exist");
+            }
+        }
+
+        // Check cluster role binding
+        let cluster_role_bindings: Api<ClusterRoleBinding> = Api::all(self.client.clone());
+        match cluster_role_bindings.get("wasmcloud-operator").await {
+            Ok(_) => {
+                status.cluster_role_binding_exists = true;
+                debug!("ClusterRoleBinding wasmcloud-operator exists");
+            }
+            Err(_) => {
+                debug!("ClusterRoleBinding wasmcloud-operator does not exist");
+            }
+        }
+
+        // Check CRDs
+        use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+        let crds: Api<CustomResourceDefinition> = Api::all(self.client.clone());
+
+        let expected_crds = vec![
+            "wasmcloudhostconfigs.core.wasmcloud.dev",
+            "wasmcloudapplications.core.wasmcloud.dev",
+            "artifacts.runtime.wasmcloud.dev",
+            "hosts.runtime.wasmcloud.dev",
+            "workloads.runtime.wasmcloud.dev",
+            "workloaddeployments.runtime.wasmcloud.dev",
+            "workloadreplicasets.runtime.wasmcloud.dev",
+        ];
+
+        for crd_name in expected_crds {
+            match crds.get(crd_name).await {
+                Ok(_) => {
+                    status.crds_installed.push(crd_name.to_string());
+                    debug!("CRD {} exists", crd_name);
+                }
+                Err(_) => {
+                    status.crds_missing.push(crd_name.to_string());
+                    debug!("CRD {} does not exist", crd_name);
+                }
+            }
+        }
+
+        // Determine overall status
+        status.overall_status = if !status.namespace_exists || 
+                                  (!status.deployment_exists && !status.service_exists && 
+                                   !status.service_account_exists && status.crds_installed.is_empty()) {
+            OverallStatus::NotInstalled
+        } else if status.deployment_exists && status.deployment_ready && 
+                  status.service_exists && status.service_account_exists &&
+                  status.cluster_role_exists && status.cluster_role_binding_exists &&
+                  status.crds_missing.is_empty() {
+            OverallStatus::InstalledAndReady
+        } else if status.deployment_exists && status.service_exists {
+            if status.deployment_ready {
+                OverallStatus::InstalledAndReady
+            } else {
+                OverallStatus::InstalledNotReady
+            }
+        } else {
+            OverallStatus::PartiallyInstalled
+        };
+
+        Ok(status)
     }
 
     /// Get common labels for all resources
