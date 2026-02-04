@@ -4,7 +4,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
     CustomResourceDefinitionNames, CustomResourceValidation, JSONSchemaProps,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-use kube::{api::{Api, PostParams}, Client};
+use kube::{api::{Api, PostParams, DeleteParams}, Client};
 use std::collections::BTreeMap;
 use tracing::debug;
 
@@ -297,7 +297,43 @@ impl CrdInstaller {
             ..Default::default()
         }
     }
+    /// Delete all wasmCloud CRDs
+    pub async fn delete_crds(&self) -> InstallerResult<()> {
+        debug!("Deleting wasmCloud CRDs");
 
+        // Define all CRDs to delete
+        let crd_names = vec![
+            // Legacy CRDs
+            "wasmcloudhostconfigs.core.wasmcloud.dev",
+            "wasmcloudapplications.core.wasmcloud.dev",
+            // Runtime CRDs
+            "artifacts.runtime.wasmcloud.dev",
+            "hosts.runtime.wasmcloud.dev",
+            "workloads.runtime.wasmcloud.dev",
+            "workloaddeployments.runtime.wasmcloud.dev",
+            "workloadreplicasets.runtime.wasmcloud.dev",
+        ];
+
+        let crds: Api<CustomResourceDefinition> = Api::all(self.client.clone());
+
+        for crd_name in crd_names {
+            match crds.delete(crd_name, &DeleteParams::default()).await {
+                Ok(_) => {
+                    debug!("Deleted CRD: {}", crd_name);
+                }
+                Err(kube::Error::Api(err)) if err.code == 404 => {
+                    debug!("CRD {} not found, skipping", crd_name);
+                }
+                Err(e) => {
+                    return Err(InstallerError::InstallationError(
+                        format!("Failed to delete CRD {}: {}", crd_name, e)
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
     /// Get common labels for CRDs
     fn common_labels(&self) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
