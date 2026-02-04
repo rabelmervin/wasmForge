@@ -68,6 +68,27 @@ async fn main() -> Result<()> {
                 .help("Timeout for installation operations in seconds")
                 .default_value("300")
                 .action(ArgAction::Set)
+        )
+        .arg(
+            Arg::new("uninstall")
+                .long("uninstall")
+                .help("Remove all wasmCloud operator resources from the cluster")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&["dry-run", "upgrade"])
+        )
+        .arg(
+            Arg::new("upgrade")
+                .long("upgrade")
+                .help("Update existing wasmCloud operator installation with new configuration")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&["dry-run", "uninstall", "status"])
+        )
+        .arg(
+            Arg::new("status")
+                .long("status")
+                .help("Check the current installation status of wasmCloud operator")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&["dry-run", "uninstall", "upgrade"])
         );
 
     let matches = app.get_matches();
@@ -95,10 +116,13 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     let dry_run = matches.get_flag("dry-run");
     let skip_validation = matches.get_flag("skip-validation");
     let timeout = matches.get_one::<String>("timeout").unwrap().parse::<u64>().unwrap_or(300);
+    let uninstall = matches.get_flag("uninstall");
+    let upgrade = matches.get_flag("upgrade");
+    let status = matches.get_flag("status");
 
-    info!("Starting Wasmcloud operator installation");
-    debug!("Configuration: namespace={}, dry_run={}, skip_validation={}, timeout={}s", 
-           namespace, dry_run, skip_validation, timeout);
+    info!("Starting Wasmcloud operator operation");
+    debug!("Configuration: namespace={}, dry_run={}, skip_validation={}, timeout={}s, uninstall={}, upgrade={}, status={}", 
+           namespace, dry_run, skip_validation, timeout, uninstall, upgrade, status);
 
     // Step 1: Load kubeconfig
     let config = load_kubeconfig(kubeconfig_path).await?;
@@ -106,22 +130,39 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     // Step 2: Create Kubernetes client
     let kube_client = create_kube_client(&config, kubeconfig_path).await?;
 
-    // Step 3: Run validation (unless skipped)
+    // Step 3: Determine operation mode
+    if uninstall {
+        // Uninstall operation
+        uninstall_operator(&kube_client, namespace).await?;
+        return Ok(());
+    } else if upgrade {
+        // Upgrade operation
+        upgrade_operator(&kube_client, namespace, timeout).await?;
+        return Ok(());
+    } else if status {
+        // Status check operation
+        check_operator_status(&kube_client, namespace).await?;
+        return Ok(());
+    }
+
+    // Default installation operation continues below
+
+    // Step 4: Run validation (unless skipped)
     if !skip_validation {
         run_validation(&kube_client, namespace).await?;
     } else {
         warn!("Skipping validation checks as requested");
     }
 
-    // Step 4: Install Wasmcloud operator
+    // Step 5: Install Wasmcloud operator
     let installer = install_operator(&kube_client, namespace, dry_run, timeout).await?;
 
-    // Step 5: Show installation summary
+    // Step 6: Show installation summary
     if !dry_run {
         installer.print_installation_summary().await?;
     } else {
         println!();
-        println!("{}", "✅ Dry run completed successfully!".green().bold());
+        println!("{}", "✓ Dry run completed successfully!".green().bold());
         println!("{}", "No resources were created.".dimmed());
     }
 
@@ -229,6 +270,54 @@ fn init_logging() -> Result<()> {
     Ok(())
 }
 
+async fn uninstall_operator(client: &KubeClient, namespace: &str) -> Result<()> {
+    println!("{}", " Uninstalling Wasmcloud operator...".red().bold());
+    println!("{}", "===================================".red());
+    println!();
+
+    let installer = WasmcloudInstaller::new(client.client(), namespace, 300, "");
+    
+    installer.uninstall().await?;
+    
+    println!();
+    println!("{}", "Uninstallation completed successfully!".green().bold());
+    println!("{}", "All wasmCloud operator resources have been removed.".dimmed());
+    
+    Ok(())
+}
+
+async fn upgrade_operator(client: &KubeClient, namespace: &str, timeout: u64) -> Result<()> {
+    println!("{}", " Upgrading Wasmcloud operator...".yellow().bold());
+    println!("{}", "=================================".yellow());
+    println!();
+
+    let installer = WasmcloudInstaller::new(client.client(), namespace, timeout, "ghcr.io/wasmcloud/wasmcloud-operator:latest");
+    
+    installer.upgrade().await?;
+    
+    // Wait for deployment to be ready
+    println!("{}", "⏳ Waiting for upgraded operator to be ready...".blue().bold());
+    installer.wait_for_ready().await?;
+    println!("   Status: {}", "✓ Upgraded operator is running".green());
+    
+    println!();
+    println!("{}", "Upgrade completed successfully!".green().bold());
+    
+    Ok(())
+}
+async fn check_operator_status(client: &KubeClient, namespace: &str) -> Result<()> {
+    println!("{}", " Checking wasmCloud operator status...".blue().bold());
+    println!("{}", "======================================".blue());
+    println!();
+
+    let installer = WasmcloudInstaller::new(client.client(), namespace, 300, "");
+    
+    let status = installer.check_installation_status().await?;
+    
+    status.print_status_report();
+    
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
