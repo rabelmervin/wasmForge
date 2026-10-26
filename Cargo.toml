@@ -1,8 +1,8 @@
 [package]
-name = "wasmcloud-operator-installer"
+name = "wasmForge"
 version = "0.1.0"
 edition = "2021"
-description = "A Rust CLI tool for installing the Wasmcloud Runtime Operator on Kubernetes"
+description = "A Rust CLI tool for installing the wasmCloud v1 operator on Kubernetes"
 authors = ["Your Name <your.email@example.com>"]
 license = "MIT"
 repository = "https://github.com/rabelmervin/wasmcloud-operator-installer"
@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
 
 # Kubernetes client library
 kube = { version = "0.87", features = ["runtime", "derive", "client"] }
@@ -61,5 +62,5 @@ debug = true
 opt-level = 0
 
 [[bin]]
-name = "wasmcloud-installer"
+name = "wasmForge"
 path = "src/main.rs"

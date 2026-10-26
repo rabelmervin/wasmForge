@@ -1,13 +1,16 @@
 # wasmForge
 
-A Rust-based command-line tool for automated deployment of the wasmCloud operator on Kubernetes clusters.
+A Rust-based command-line tool for automated deployment of the wasmCloud v1 operator ([wasmcloud-operator](https://github.com/wasmCloud/wasmcloud-operator)) on Kubernetes clusters.
+
+> **Note:** wasmForge targets wasmCloud **v1**. The upstream `wasmcloud-operator` is archived and wasmCloud 1.x is deprecated. wasmCloud v2 is installed with the official [`runtime-operator` Helm chart](https://wasmcloud.com/docs/kubernetes-operator/).
 
 ## Overview
 
 This tool automates the installation of the wasmCloud operator by performing the following operations:
 - Creates the target namespace and configures RBAC (Role-Based Access Control) permissions
-- Installs all required Custom Resource Definitions (CRDs) for both runtime and legacy compatibility
-- Deploys the operator and verifies successful initialization
+- Applies every resource with server-side apply, so re-running is safe
+- Deploys the operator and waits until it has rolled out, registered its CRD, and served its API
+- Reports container state, recent events, and log lines when the operator fails to start
 - Performs pre-installation validation to ensure cluster compatibility
 - Supports any standard Kubernetes cluster with appropriate kubeconfig authentication
 
@@ -23,10 +26,10 @@ This tool automates the installation of the wasmCloud operator by performing the
 #### Build from Source
 
 ```bash
-git clone https://github.com/rabelmervin/wasmcloud-operator-installer
-cd wasmcloud-operator-installer
+git clone https://github.com/rabelmervin/wasmForge
+cd wasmForge
 cargo build --release
-./target/r okelease/wasmcloud-installer --help
+wasmForge --help
 ```
 
 ### Create a Kubernetes Cluster
@@ -45,61 +48,84 @@ kubectl cluster-info --context wasmcloud-cluster
 
 ```bash
 # Basic installation with default settings
-./target/release/wasmcloud-installer
+wasmForge
 
 # Specify custom kubeconfig
-./target/release/wasmcloud-installer --kubeconfig ~/.kube/config
+wasmForge --kubeconfig ~/.kube/config
 
 # Define custom namespace
-./target/release/wasmcloud-installer --namespace wasmcloud-system
+wasmForge --namespace wasmcloud-system
 
 # Preview installation without applying changes
-./target/release/wasmcloud-installer --dry-run
+wasmForge --dry-run
 
 # Enable verbose logging for troubleshooting
-./target/release/wasmcloud-installer --verbose
+wasmForge --verbose
 
 # Complete example with all options
-./target/release/wasmcloud-installer --kubeconfig ~/.kube/config --namespace wasmcloud-demo
+wasmForge --kubeconfig ~/.kube/config --namespace wasmcloud-demo
 ```
 
 ### Uninstall Examples
 
 ```bash
 # Remove wasmCloud operator from default namespace
-./target/release/wasmcloud-installer --uninstall
+wasmForge --uninstall
 
 # Remove from custom namespace
-./target/release/wasmcloud-installer --uninstall --namespace wasmcloud-system
+wasmForge --uninstall --namespace wasmcloud-system
 
 # Uninstall with custom kubeconfig
-./target/release/wasmcloud-installer --uninstall --kubeconfig ~/.kube/prod-config
+wasmForge --uninstall --kubeconfig ~/.kube/prod-config
 ```
 
 ### Upgrade Examples
 
 ```bash
 # Upgrade existing installation
-./target/release/wasmcloud-installer --upgrade
+wasmForge --upgrade
 
 # Upgrade installation in custom namespace
-./target/release/wasmcloud-installer --upgrade --namespace wasmcloud-system
+wasmForge --upgrade --namespace wasmcloud-system
 
 # Upgrade with different kubeconfig (for cluster migration)
-./target/release/wasmcloud-installer --upgrade --kubeconfig ~/.kube/new-cluster
+wasmForge --upgrade --kubeconfig ~/.kube/new-cluster
 ```
 
 ### Status Check Examples
 
 ```bash
 # Check status in default namespace
-./target/release/wasmcloud-installer --status
+wasmForge --status
 
 # Check status in custom namespace
-./target/release/wasmcloud-installer --status --namespace wasmcloud-system
+wasmForge --status --namespace wasmcloud-system
 
 # Check status with custom kubeconfig
-./target/release/wasmcloud-installer --status --kubeconfig ~/.kube/prod-config
+wasmForge --status --kubeconfig ~/.kube/prod-config
+
+# Machine-readable status for CI
+wasmForge --status -o json | jq -e '.overall_status == "installed_and_ready"'
+```
+
+### Doctor Examples
+
+```bash
+# Diagnose an installation (exits 1 if any check fails)
+wasmForge --doctor
+
+# JSON report for CI or bug reports
+wasmForge --doctor -o json
+```
+
+### Render Manifests (GitOps)
+
+```bash
+# Print the exact manifests wasmForge applies. No cluster or kubeconfig needed
+wasmForge --dry-run -o yaml > wasmcloud-operator.yaml
+
+# Inspect, commit to a GitOps repo, or apply directly
+wasmForge --dry-run -o yaml --namespace wasmcloud-system | kubectl apply --server-side -f -
 ```
 
 ## CLI Options
@@ -115,10 +141,12 @@ kubectl cluster-info --context wasmcloud-cluster
 | `--uninstall` | | Remove all wasmCloud operator resources from the cluster | `false` |
 | `--upgrade` | | Update existing wasmCloud operator installation with new configuration | `false` |
 | `--status` | | Check the current installation status of wasmCloud operator | `false` |
+| `--doctor` | | Diagnose an installation and suggest fixes | `false` |
+| `--output` | `-o` | `text`, `json` (with `--status`/`--doctor`) or `yaml` (with `--dry-run`) | `text` |
 | `--help` | `-h` | Show help information | |
 | `--version` | `-V` | Show version information | |
 
-**Note**: The `--uninstall`, `--upgrade`, and `--status` flags cannot be used together with `--dry-run` or each other.
+**Note**: The `--uninstall`, `--upgrade`, `--status`, and `--doctor` flags cannot be used together with `--dry-run` or each other. With `-o json` or `-o yaml`, stdout contains only the document and logs go to stderr.
 
 ## Installation Components
 
@@ -128,31 +156,29 @@ The installer deploys the following Kubernetes resources:
 The specified namespace (default: `wasmcloud-operator`) is created if not present.
 
 ### RBAC Configuration
+Mirrors the upstream manifests in wasmcloud-operator v0.5.0:
 - ServiceAccount for operator identity
 - ClusterRole defining required permissions
 - ClusterRoleBinding linking the ServiceAccount to the ClusterRole
+- ClusterRoleBinding `wasmcloud-operator-delegator` to `system:auth-delegator`, used by the operator's aggregated API server
 
 ### Operator Deployment
 - Kubernetes Deployment running the wasmCloud operator
-- Service exposing operator endpoints
+- Service `wasmcloud-operator` on port 8443, which the operator's APIService points at
 
-### Custom Resource Definitions (CRDs)
-**Runtime CRDs** (runtime.wasmcloud.dev/v1alpha1):
-- **Artifact**: Container for WebAssembly component images and OCI artifacts
-- **Host**: Defines wasmCloud runtime execution environments
-- **Workload**: Application specifications including components and configuration
-- **WorkloadDeployment**: Primary deployment interface analogous to Kubernetes Deployment
-- **WorkloadReplicaSet**: Manages workload replicas (controlled by WorkloadDeployment)
+### Registered by the operator
+wasmForge does not write CRD schemas. On startup the operator registers:
+- **CRD** `wasmcloudhostconfigs.k8s.wasmcloud.dev` (`WasmCloudHostConfig`, k8s.wasmcloud.dev/v1alpha1)
+- **APIService** `v1beta1.core.oam.dev`, which serves wadm applications through the Kubernetes API
 
-**Legacy CRDs** (runtime.wasmcloud.dev/v1alpha1 - for backward compatibility):
-- **WasmCloudHostConfig**: Legacy host configuration definitions
-- **WasmCloudApplication**: Legacy application definitions
+The installer waits for the CRD to be Established and the APIService to be Available.
 
 ### Operator Deployment Configuration
-- **Container Image**: `ghcr.io/wasmcloud/wasmcloud-operator:0.4.0`
-- **Resource Requests**: 100m CPU, 128Mi memory
-- **Resource Limits**: 200m CPU, 256Mi memory
-- **Listening Port**: 8080
+- **Container Image**: `ghcr.io/wasmcloud/wasmcloud-operator:0.5.0` (last release under this name; later releases are `wadm-operator`)
+- **Listening Port**: 8443 (HTTPS)
+
+### Runtime prerequisites
+The operator installs cleanly on its own, but to run wasmCloud hosts it needs a NATS cluster with JetStream and wadm. See the [upstream quickstart](https://github.com/wasmCloud/wasmcloud-operator/tree/main/examples/quickstart).
 
 ## Operations
 
@@ -161,7 +187,7 @@ The specified namespace (default: `wasmcloud-operator`) is created if not presen
 Standard installation creates all resources and deploys the operator:
 
 ```bash
-./target/release/wasmcloud-installer --namespace wasmcloud-operator
+wasmForge --namespace wasmcloud-operator
 ```
 
 ### Uninstallation
@@ -170,22 +196,23 @@ The `--uninstall` flag removes all wasmCloud operator resources from the specifi
 
 ```bash
 # Remove all wasmCloud operator resources
-./target/release/wasmcloud-installer --uninstall --namespace wasmcloud-operator
+wasmForge --uninstall --namespace wasmcloud-operator
 
 # Remove from a different namespace
-./target/release/wasmcloud-installer --uninstall --namespace my-wasmcloud
+wasmForge --uninstall --namespace my-wasmcloud
 ```
 
 **What gets removed during uninstall:**
-- Operator deployment and pods
+- Operator deployment and pods (waits until they have stopped)
+- APIService `v1beta1.core.oam.dev`, only if it points at this installation's Service
 - Service exposing operator endpoints
-- ClusterRole and ClusterRoleBinding (RBAC resources)
+- ClusterRole and both ClusterRoleBindings (RBAC resources)
 - ServiceAccount
-- All Custom Resource Definitions (CRDs)
+- The `WasmCloudHostConfig` CRD, plus CRDs created by older wasmForge versions
 - Namespace (only if it was created by the installer and is empty)
 
 **Important Notes:**
-- Uninstall will remove CRDs, which will also delete any existing custom resources (WasmCloudApplications, etc.)
+- Uninstall will remove the CRD, which will also delete any existing `WasmCloudHostConfig` resources
 - The namespace is only deleted if it was created by the installer and contains no other resources
 - Uninstall is a destructive operation and cannot be undone
 
@@ -195,24 +222,22 @@ The `--upgrade` flag updates an existing wasmCloud operator installation:
 
 ```bash
 # Upgrade to latest operator version
-./target/release/wasmcloud-installer --upgrade --namespace wasmcloud-operator
+wasmForge --upgrade --namespace wasmcloud-operator
 
 # Upgrade with custom kubeconfig
-./target/release/wasmcloud-installer --upgrade -k /path/to/kubeconfig
+wasmForge --upgrade -k /path/to/kubeconfig
 ```
 
-**What gets updated during upgrade:**
-- Custom Resource Definitions (CRDs) are updated to latest versions
-- ClusterRole permissions are updated
-- ClusterRoleBinding is updated to reference current namespace
-- Deployment is updated with latest container image and configuration
+Upgrade uses the same server-side apply path as installation, so every resource is brought to the desired state:
+- ClusterRole and ClusterRoleBindings are updated (including the subject namespace)
+- Deployment is updated with the pinned container image and configuration, triggering a rolling update
 - Service configuration is updated if needed
+- The operator re-registers its CRD on startup, so its schema always matches the operator version
 
 **Upgrade Process:**
-1. Updates CRDs with latest schema definitions
-2. Updates RBAC resources (ClusterRole and ClusterRoleBinding)
-3. Performs rolling update of the operator deployment
-4. Verifies the upgraded operator is running correctly
+1. Applies RBAC, Service, and Deployment
+2. Waits for the rollout to complete (failing fast on crash loops or image pull errors)
+3. Waits for the operator's CRD and APIService to be ready
 
 **Use Cases:**
 - Switching to a new kubeconfig file/cluster context
@@ -226,10 +251,10 @@ The `--status` flag checks the current installation status of the wasmCloud oper
 
 ```bash
 # Check status of installation
-./target/release/wasmcloud-installer --status --namespace wasmcloud-operator
+wasmForge --status --namespace wasmcloud-operator
 
 # Check with custom kubeconfig
-./target/release/wasmcloud-installer --status -k /path/to/kubeconfig
+wasmForge --status -k /path/to/kubeconfig
 ```
 
 **Status Information Provided:**
@@ -246,6 +271,23 @@ The `--status` flag checks the current installation status of the wasmCloud oper
 - Troubleshoot installation issues
 - Check health status of running operator
 - Audit what components are installed
+
+### Doctor
+
+`--doctor` inspects a live installation without changing anything, and reports each check as pass, warning or failure with a suggested fix:
+
+| Area | What it checks |
+|------|----------------|
+| Operator | Deployment exists, image matches the pinned version, rollout complete |
+| Pods | Crash loops, image pull errors, restarts with last exit reason, plus log tails |
+| Service | Port 8443 exposed and backed by ready endpoints |
+| RBAC | Live ClusterRole compared rule by rule against what the operator needs; bindings target the right namespace |
+| CRDs | `WasmCloudHostConfig` Established with v1alpha1 served and stored; leftovers from older wasmForge versions; wasmCloud v2 CRDs on the same cluster |
+| Aggregated API | `v1beta1.core.oam.dev` points at this install and is Available, with the failure reason if not |
+| NATS | For every `WasmCloudHostConfig` (or the default address if none exist): Service exists, client and leafnode ports exposed, ready endpoints |
+| wadm | A wadm Deployment is running |
+
+NATS is checked through Kubernetes objects, not a live connection, so JetStream availability is not verified. Doctor exits with code 1 if any check fails.
 
 ## Pre-Installation Validation
 
@@ -272,7 +314,7 @@ kubectl auth can-i create namespaces
 If a namespace remains in terminating state, specify an alternate namespace name:
 
 ```bash
-./target/release/wasmcloud-installer --namespace wasmcloud-alternate
+wasmForge --namespace wasmcloud-alternate
 ```
 
 ### Installation Timeout
@@ -280,7 +322,7 @@ If a namespace remains in terminating state, specify an alternate namespace name
 For slow clusters, increase the timeout duration (default: 300 seconds):
 
 ```bash
-./target/release/wasmcloud-installer --timeout 600
+wasmForge --timeout 600
 ```
 
 ### Verbose Logging
@@ -288,7 +330,7 @@ For slow clusters, increase the timeout duration (default: 300 seconds):
 Enable debug output for detailed troubleshooting:
 
 ```bash
-./target/release/wasmcloud-installer --verbose
+wasmForge --verbose
 ```
 
 ### Manual Resource Cleanup
@@ -296,9 +338,11 @@ Enable debug output for detailed troubleshooting:
 If installation fails, remove resources manually:
 
 ```bash
+kubectl delete apiservice v1beta1.core.oam.dev
 kubectl delete namespace wasmcloud-operator
-kubectl delete clusterrolebinding wasmcloud-operator
+kubectl delete clusterrolebinding wasmcloud-operator wasmcloud-operator-delegator
 kubectl delete clusterrole wasmcloud-operator
+kubectl delete crd wasmcloudhostconfigs.k8s.wasmcloud.dev
 ```
 
 ## Architecture
@@ -318,8 +362,10 @@ src/
 ├── config.rs        # Kubeconfig parsing and validation
 ├── kubernetes.rs    # Kubernetes API client wrapper
 ├── validator.rs     # Pre-installation validation checks
-├── install.rs       # Operator deployment logic
-├── crds.rs          # CRD installation management
+├── install.rs       # Apply, readiness, upgrade, uninstall and status
+├── manifests.rs     # Kubernetes manifests the installer applies
+├── doctor.rs        # Diagnostic checks for --doctor
+├── crds.rs          # Readiness and cleanup of the operator's CRD
 └── error.rs         # Error type definitions
 ```
 
