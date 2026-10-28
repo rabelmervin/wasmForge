@@ -167,6 +167,7 @@ impl KubeConfig {
     }
 
     /// Get the current user info
+    #[allow(dead_code)]
     pub fn get_current_user(&self) -> InstallerResult<&UserInfo> {
         let current = self
             .contexts
@@ -185,6 +186,7 @@ impl KubeConfig {
     }
 
     /// Get the namespace from current context
+    #[allow(dead_code)]
     pub fn get_namespace(&self) -> InstallerResult<String> {
         let current = self
             .contexts

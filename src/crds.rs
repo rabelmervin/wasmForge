@@ -13,9 +13,9 @@ use tracing::{debug, warn};
 /// from the operator version being deployed.
 pub const HOST_CONFIG_CRD: &str = "wasmcloudhostconfigs.k8s.wasmcloud.dev";
 
-/// Earlier wasmForge versions hand-wrote CRDs and labelled them with this.
+/// Earlier forge versions hand-wrote CRDs and labelled them with this.
 /// Uninstall removes them so old installs get cleaned up too.
-pub const LEGACY_CRD_SELECTOR: &str = "app.kubernetes.io/managed-by=wasmForge";
+pub const LEGACY_CRD_SELECTOR: &str = "app.kubernetes.io/managed-by=forge";
 
 /// Typed handle for WasmCloudHostConfig objects, which have no Rust type here
 pub fn host_config_resource() -> ApiResource {
@@ -116,7 +116,7 @@ impl CrdManager {
         Ok(host_configs.len())
     }
 
-    /// Delete the operator's CRD plus any CRDs left behind by older wasmForge versions
+    /// Delete the operator's CRD plus any CRDs left behind by older forge versions
     pub async fn delete_crds(&self) -> InstallerResult<()> {
         debug!("Deleting wasmCloud CRDs");
 

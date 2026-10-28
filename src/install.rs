@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 /// Field manager used for server-side apply
-const FIELD_MANAGER: &str = "wasmForge";
+const FIELD_MANAGER: &str = "forge";
 
 /// Container waiting reasons that won't resolve without intervention
 const FATAL_WAITING_REASONS: &[&str] = &[
@@ -161,17 +161,17 @@ impl InstallationStatus {
         match self.overall_status {
             OverallStatus::NotInstalled => {
                 println!("{}", "💡 Recommendations:".bold());
-                println!("   • Run installation: wasmForge --namespace {}", self.namespace_name);
+                println!("   • Run installation: forge --namespace {}", self.namespace_name);
             }
             OverallStatus::PartiallyInstalled => {
                 println!("{}", "💡 Recommendations:".bold());
-                println!("   • Complete installation: wasmForge --upgrade --namespace {}", self.namespace_name);
-                println!("   • Or clean up: wasmForge --uninstall --namespace {}", self.namespace_name);
+                println!("   • Complete installation: forge --upgrade --namespace {}", self.namespace_name);
+                println!("   • Or clean up: forge --uninstall --namespace {}", self.namespace_name);
             }
             OverallStatus::InstalledNotReady => {
                 println!("{}", "💡 Recommendations:".bold());
                 println!("   • Check pod logs: kubectl logs -n {} deployment/wasmcloud-operator", self.namespace_name);
-                println!("   • Try upgrade: wasmForge --upgrade --namespace {}", self.namespace_name);
+                println!("   • Try upgrade: forge --upgrade --namespace {}", self.namespace_name);
             }
             OverallStatus::InstalledAndReady => {
                 println!("{}", "🎉 Installation is healthy and ready!".green().bold());
@@ -783,7 +783,7 @@ impl WasmcloudInstaller {
         match namespaces.get(&self.namespace).await {
             Ok(ns) => {
                 if let Some(labels) = &ns.metadata.labels {
-                    if labels.get("app.kubernetes.io/managed-by") == Some(&"wasmForge".to_string()) {
+                    if labels.get("app.kubernetes.io/managed-by") == Some(&"forge".to_string()) {
                         // Check if namespace is empty (no other resources)
                         if self.is_namespace_empty().await? {
                             match namespaces.delete(&self.namespace, &DeleteParams::default()).await {

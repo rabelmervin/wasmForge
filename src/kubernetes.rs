@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 /// Kubernetes client wrapper
 pub struct KubeClient {
     client: Client,
+    #[allow(dead_code)]
     cluster_url: String,
 }
 
@@ -105,6 +106,7 @@ impl KubeClient {
     }
 
     /// Get cluster URL
+    #[allow(dead_code)]
     pub fn cluster_url(&self) -> &str {
         &self.cluster_url
     }

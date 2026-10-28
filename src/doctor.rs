@@ -65,7 +65,7 @@ pub struct DoctorReport {
 
 impl DoctorReport {
     pub fn print(&self) {
-        println!("{}", format!("🩺 wasmForge doctor - namespace {}", self.namespace).bold());
+        println!("{}", format!("🩺 forge doctor - namespace {}", self.namespace).bold());
         println!("{}", "=".repeat(50));
 
         let mut current_category = "";
@@ -182,7 +182,7 @@ impl Doctor {
             Ok(None) => {
                 let namespace = self.namespace.clone();
                 self.record(CAT, "Namespace", CheckStatus::Fail, format!("{} not found, the operator is not installed", namespace))
-                    .hint = Some(format!("Install with: wasmForge --namespace {}", namespace));
+                    .hint = Some(format!("Install with: forge --namespace {}", namespace));
                 false
             }
             Err(e) => {
@@ -202,7 +202,7 @@ impl Doctor {
             Ok(None) => {
                 let namespace = self.namespace.clone();
                 self.record(CAT, "Deployment", CheckStatus::Fail, format!("{} not found", OPERATOR_NAME)).hint =
-                    Some(format!("Install with: wasmForge --namespace {}", namespace));
+                    Some(format!("Install with: forge --namespace {}", namespace));
                 return false;
             }
             Err(e) => {
@@ -219,9 +219,9 @@ impl Doctor {
             let image = self.image.clone();
             self.record(CAT, "Image", CheckStatus::Pass, image);
         } else {
-            let message = format!("running {}, wasmForge pins {}", images.join(", "), self.image);
+            let message = format!("running {}, forge pins {}", images.join(", "), self.image);
             self.record(CAT, "Image", CheckStatus::Warn, message).hint =
-                Some(format!("Align with: wasmForge --upgrade --namespace {}", self.namespace));
+                Some(format!("Align with: forge --upgrade --namespace {}", self.namespace));
         }
 
         let status = deployment.status.clone().unwrap_or_default();
@@ -306,7 +306,7 @@ impl Doctor {
         let ports = service_ports(&service);
         if !ports.contains(&(OPERATOR_PORT as i64)) {
             self.record(CAT, "Service", CheckStatus::Fail, format!("exposes {:?}, the operator's APIService expects {}", ports, OPERATOR_PORT))
-                .hint = Some(format!("Fix with: wasmForge --upgrade --namespace {}", self.namespace));
+                .hint = Some(format!("Fix with: forge --upgrade --namespace {}", self.namespace));
             return;
         }
 
@@ -347,7 +347,7 @@ impl Doctor {
                     let namespace = self.namespace.clone();
                     let check = self.record(CAT, "ClusterRole", CheckStatus::Fail, format!("missing {} permission(s)", missing.len()));
                     check.details = missing;
-                    check.hint = Some(format!("Restore with: wasmForge --upgrade --namespace {}", namespace));
+                    check.hint = Some(format!("Restore with: forge --upgrade --namespace {}", namespace));
                 }
             }
             _ => {
@@ -363,7 +363,7 @@ impl Doctor {
                 _ => {
                     let namespace = self.namespace.clone();
                     self.record(CAT, &label, CheckStatus::Fail, "not found").hint =
-                        Some(format!("Restore with: wasmForge --upgrade --namespace {}", namespace));
+                        Some(format!("Restore with: forge --upgrade --namespace {}", namespace));
                     continue;
                 }
             };
@@ -382,7 +382,7 @@ impl Doctor {
                 );
                 let namespace = self.namespace.clone();
                 self.record(CAT, &label, CheckStatus::Fail, message).hint =
-                    Some(format!("Installed into another namespace? Rebind with: wasmForge --upgrade --namespace {}", namespace));
+                    Some(format!("Installed into another namespace? Rebind with: forge --upgrade --namespace {}", namespace));
             } else {
                 self.record(CAT, &label, CheckStatus::Pass, format!("{} → {}/{}", role, self.namespace, OPERATOR_NAME));
             }
@@ -433,10 +433,10 @@ impl Doctor {
         let leftovers: Vec<String> = all.iter().filter(|c| is_legacy(c)).map(|c| c.name_any()).collect();
         if !leftovers.is_empty() {
             let namespace = self.namespace.clone();
-            let check = self.record(CAT, "Leftovers", CheckStatus::Warn, format!("{} CRD(s) from an older wasmForge version", leftovers.len()));
+            let check = self.record(CAT, "Leftovers", CheckStatus::Warn, format!("{} CRD(s) from an older forge version", leftovers.len()));
             check.details = leftovers;
             check.hint = Some(format!(
-                "Clean up with: wasmForge --uninstall --namespace {0} && wasmForge --namespace {0}", namespace
+                "Clean up with: forge --uninstall --namespace {0} && forge --namespace {0}", namespace
             ));
         }
 
@@ -447,7 +447,7 @@ impl Doctor {
         if !v2.is_empty() {
             let check = self.record(CAT, "wasmCloud v2", CheckStatus::Warn, "runtime-operator CRDs are also installed");
             check.details = v2;
-            check.hint = Some("wasmForge manages the v1 operator. Running v1 and v2 side by side is untested".to_string());
+            check.hint = Some("forge manages the v1 operator. Running v1 and v2 side by side is untested".to_string());
         }
     }
 
@@ -541,7 +541,7 @@ impl Doctor {
             }
             _ => {
                 self.record(CAT, "wadm", CheckStatus::Warn, format!("no Deployment labelled {} found", WADM_SELECTOR)).hint =
-                    Some("Install with: helm install wadm oci://ghcr.io/wasmcloud/charts/wadm".to_string());
+                    Some("Install with: forge --with-deps, or helm install wadm oci://ghcr.io/wasmcloud/charts/wadm".to_string());
             }
         }
     }
@@ -569,7 +569,7 @@ impl Doctor {
             _ => {
                 let check = self.record(CAT, &name, missing_status, format!("Service {}/{} not found", namespace, service_name));
                 check.details = used_by;
-                check.hint = Some("Install NATS with JetStream: helm upgrade --install nats nats/nats (see the upstream quickstart)".to_string());
+                check.hint = Some("Install with: forge --with-deps, or helm upgrade --install nats nats/nats with JetStream and leafnodes enabled".to_string());
                 return;
             }
         };

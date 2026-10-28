@@ -1,8 +1,8 @@
-# wasmForge
+# forge
 
 A Rust-based command-line tool for automated deployment of the wasmCloud v1 operator ([wasmcloud-operator](https://github.com/wasmCloud/wasmcloud-operator)) on Kubernetes clusters.
 
-> **Note:** wasmForge targets wasmCloud **v1**. The upstream `wasmcloud-operator` is archived and wasmCloud 1.x is deprecated. wasmCloud v2 is installed with the official [`runtime-operator` Helm chart](https://wasmcloud.com/docs/kubernetes-operator/).
+> **Note:** forge targets wasmCloud **v1**. The upstream `wasmcloud-operator` is archived and wasmCloud 1.x is deprecated. wasmCloud v2 is installed with the official [`runtime-operator` Helm chart](https://wasmcloud.com/docs/kubernetes-operator/).
 
 ## Overview
 
@@ -26,10 +26,10 @@ This tool automates the installation of the wasmCloud operator by performing the
 #### Build from Source
 
 ```bash
-git clone https://github.com/rabelmervin/wasmForge
-cd wasmForge
+git clone https://github.com/rabelmervin/forge
+cd forge
 cargo build --release
-wasmForge --help
+forge --help
 ```
 
 ### Create a Kubernetes Cluster
@@ -37,6 +37,9 @@ wasmForge --help
 ```bash
 # Create a kind cluster for wasmCloud
 kind create cluster --name wasmcloud-cluster
+
+# With kube config file in action
+kind create cluster --name demo --kubeconfig kubeconfig 
 
 # Verify cluster is running
 kubectl cluster-info --context wasmcloud-cluster
@@ -48,84 +51,105 @@ kubectl cluster-info --context wasmcloud-cluster
 
 ```bash
 # Basic installation with default settings
-wasmForge
+forge
 
 # Specify custom kubeconfig
-wasmForge --kubeconfig ~/.kube/config
+forge --kubeconfig ~/.kube/config
 
 # Define custom namespace
-wasmForge --namespace wasmcloud-system
+forge --namespace wasmcloud-system
 
 # Preview installation without applying changes
-wasmForge --dry-run
+forge --dry-run
 
 # Enable verbose logging for troubleshooting
-wasmForge --verbose
+forge --verbose
 
 # Complete example with all options
-wasmForge --kubeconfig ~/.kube/config --namespace wasmcloud-demo
+forge --kubeconfig ~/.kube/config --namespace wasmcloud-demo
 ```
+
+### Install Everything (NATS, wadm and the operator)
+
+```bash
+# One command: NATS (JetStream + leafnodes), wadm, then the operator, then a doctor run
+forge --kubeconfig ~/.kube/config --with-deps
+
+# Preview what would be installed or skipped
+forge --kubeconfig ~/.kube/config --with-deps --dry-run
+```
+
+`--with-deps` needs helm 3.13 or newer on your PATH. forge passes helm the same kubeconfig and context it
+uses itself, so the charts always land in the same cluster as the operator. NATS and wadm go into the
+`default` namespace, which is where the operator's default NATS address points.
+
+If NATS or wadm is already running and forge didn't install it, forge leaves it as is. Releases forge
+installs are labelled `managed-by=forge`. Re-running `--with-deps` upgrades them, and
+`--uninstall --with-deps` removes only those.
 
 ### Uninstall Examples
 
 ```bash
 # Remove wasmCloud operator from default namespace
-wasmForge --uninstall
+forge --uninstall
 
 # Remove from custom namespace
-wasmForge --uninstall --namespace wasmcloud-system
+forge --uninstall --namespace wasmcloud-system
 
 # Uninstall with custom kubeconfig
-wasmForge --uninstall --kubeconfig ~/.kube/prod-config
+forge --uninstall --kubeconfig ~/.kube/prod-config
+
+# Also remove the NATS and wadm releases forge installed
+forge --uninstall --with-deps
 ```
 
 ### Upgrade Examples
 
 ```bash
 # Upgrade existing installation
-wasmForge --upgrade
+forge --upgrade
 
 # Upgrade installation in custom namespace
-wasmForge --upgrade --namespace wasmcloud-system
+forge --upgrade --namespace wasmcloud-system
 
 # Upgrade with different kubeconfig (for cluster migration)
-wasmForge --upgrade --kubeconfig ~/.kube/new-cluster
+forge --upgrade --kubeconfig ~/.kube/new-cluster
 ```
 
 ### Status Check Examples
 
 ```bash
 # Check status in default namespace
-wasmForge --status
+forge --status
 
 # Check status in custom namespace
-wasmForge --status --namespace wasmcloud-system
+forge --status --namespace wasmcloud-system
 
 # Check status with custom kubeconfig
-wasmForge --status --kubeconfig ~/.kube/prod-config
+forge --status --kubeconfig ~/.kube/prod-config
 
 # Machine-readable status for CI
-wasmForge --status -o json | jq -e '.overall_status == "installed_and_ready"'
+forge --status -o json | jq -e '.overall_status == "installed_and_ready"'
 ```
 
 ### Doctor Examples
 
 ```bash
 # Diagnose an installation (exits 1 if any check fails)
-wasmForge --doctor
+forge --doctor
 
 # JSON report for CI or bug reports
-wasmForge --doctor -o json
+forge --doctor -o json
 ```
 
 ### Render Manifests (GitOps)
 
 ```bash
-# Print the exact manifests wasmForge applies. No cluster or kubeconfig needed
-wasmForge --dry-run -o yaml > wasmcloud-operator.yaml
+# Print the exact manifests forge applies. No cluster or kubeconfig needed
+forge --dry-run -o yaml > wasmcloud-operator.yaml
 
 # Inspect, commit to a GitOps repo, or apply directly
-wasmForge --dry-run -o yaml --namespace wasmcloud-system | kubectl apply --server-side -f -
+forge --dry-run -o yaml --namespace wasmcloud-system | kubectl apply --server-side -f -
 ```
 
 ## CLI Options
@@ -167,7 +191,7 @@ Mirrors the upstream manifests in wasmcloud-operator v0.5.0:
 - Service `wasmcloud-operator` on port 8443, which the operator's APIService points at
 
 ### Registered by the operator
-wasmForge does not write CRD schemas. On startup the operator registers:
+forge does not write CRD schemas. On startup the operator registers:
 - **CRD** `wasmcloudhostconfigs.k8s.wasmcloud.dev` (`WasmCloudHostConfig`, k8s.wasmcloud.dev/v1alpha1)
 - **APIService** `v1beta1.core.oam.dev`, which serves wadm applications through the Kubernetes API
 
@@ -187,7 +211,7 @@ The operator installs cleanly on its own, but to run wasmCloud hosts it needs a 
 Standard installation creates all resources and deploys the operator:
 
 ```bash
-wasmForge --namespace wasmcloud-operator
+forge --namespace wasmcloud-operator
 ```
 
 ### Uninstallation
@@ -196,10 +220,10 @@ The `--uninstall` flag removes all wasmCloud operator resources from the specifi
 
 ```bash
 # Remove all wasmCloud operator resources
-wasmForge --uninstall --namespace wasmcloud-operator
+forge --uninstall --namespace wasmcloud-operator
 
 # Remove from a different namespace
-wasmForge --uninstall --namespace my-wasmcloud
+forge --uninstall --namespace my-wasmcloud
 ```
 
 **What gets removed during uninstall:**
@@ -208,7 +232,7 @@ wasmForge --uninstall --namespace my-wasmcloud
 - Service exposing operator endpoints
 - ClusterRole and both ClusterRoleBindings (RBAC resources)
 - ServiceAccount
-- The `WasmCloudHostConfig` CRD, plus CRDs created by older wasmForge versions
+- The `WasmCloudHostConfig` CRD, plus CRDs created by older forge versions
 - Namespace (only if it was created by the installer and is empty)
 
 **Important Notes:**
@@ -222,10 +246,10 @@ The `--upgrade` flag updates an existing wasmCloud operator installation:
 
 ```bash
 # Upgrade to latest operator version
-wasmForge --upgrade --namespace wasmcloud-operator
+forge --upgrade --namespace wasmcloud-operator
 
 # Upgrade with custom kubeconfig
-wasmForge --upgrade -k /path/to/kubeconfig
+forge --upgrade -k /path/to/kubeconfig
 ```
 
 Upgrade uses the same server-side apply path as installation, so every resource is brought to the desired state:
@@ -251,10 +275,10 @@ The `--status` flag checks the current installation status of the wasmCloud oper
 
 ```bash
 # Check status of installation
-wasmForge --status --namespace wasmcloud-operator
+forge --status --namespace wasmcloud-operator
 
 # Check with custom kubeconfig
-wasmForge --status -k /path/to/kubeconfig
+forge --status -k /path/to/kubeconfig
 ```
 
 **Status Information Provided:**
@@ -282,7 +306,7 @@ wasmForge --status -k /path/to/kubeconfig
 | Pods | Crash loops, image pull errors, restarts with last exit reason, plus log tails |
 | Service | Port 8443 exposed and backed by ready endpoints |
 | RBAC | Live ClusterRole compared rule by rule against what the operator needs; bindings target the right namespace |
-| CRDs | `WasmCloudHostConfig` Established with v1alpha1 served and stored; leftovers from older wasmForge versions; wasmCloud v2 CRDs on the same cluster |
+| CRDs | `WasmCloudHostConfig` Established with v1alpha1 served and stored; leftovers from older forge versions; wasmCloud v2 CRDs on the same cluster |
 | Aggregated API | `v1beta1.core.oam.dev` points at this install and is Available, with the failure reason if not |
 | NATS | For every `WasmCloudHostConfig` (or the default address if none exist): Service exists, client and leafnode ports exposed, ready endpoints |
 | wadm | A wadm Deployment is running |
@@ -314,7 +338,7 @@ kubectl auth can-i create namespaces
 If a namespace remains in terminating state, specify an alternate namespace name:
 
 ```bash
-wasmForge --namespace wasmcloud-alternate
+forge --namespace wasmcloud-alternate
 ```
 
 ### Installation Timeout
@@ -322,7 +346,7 @@ wasmForge --namespace wasmcloud-alternate
 For slow clusters, increase the timeout duration (default: 300 seconds):
 
 ```bash
-wasmForge --timeout 600
+forge --timeout 600
 ```
 
 ### Verbose Logging
@@ -330,7 +354,7 @@ wasmForge --timeout 600
 Enable debug output for detailed troubleshooting:
 
 ```bash
-wasmForge --verbose
+forge --verbose
 ```
 
 ### Manual Resource Cleanup
@@ -353,21 +377,6 @@ This installer utilizes the following Rust libraries:
 - **kube-rs**: Kubernetes API client library
 - **Clap**: Command-line argument parsing framework
 - **Serde**: YAML/JSON serialization and deserialization
-
-### Module Structure
-
-```
-src/
-├── main.rs          # CLI orchestration and entry point
-├── config.rs        # Kubeconfig parsing and validation
-├── kubernetes.rs    # Kubernetes API client wrapper
-├── validator.rs     # Pre-installation validation checks
-├── install.rs       # Apply, readiness, upgrade, uninstall and status
-├── manifests.rs     # Kubernetes manifests the installer applies
-├── doctor.rs        # Diagnostic checks for --doctor
-├── crds.rs          # Readiness and cleanup of the operator's CRD
-└── error.rs         # Error type definitions
-```
 
 ## Development
 

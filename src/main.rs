@@ -6,6 +6,7 @@ use tracing::{info, warn, debug};
 
 mod config;
 mod crds;
+mod deps;
 mod doctor;
 mod error;
 mod manifests;
@@ -14,6 +15,7 @@ mod kubernetes;
 mod validator;
 
 use config::KubeConfig;
+use deps::Dependencies;
 use doctor::Doctor;
 use error::InstallerError;
 use install::WasmcloudInstaller;
@@ -23,7 +25,7 @@ use validator::Validator;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = Command::new("wasmForge")
+    let app = Command::new("forge")
         .version("0.1.0")
         .author("Your Name <your.email@example.com>")
         .about("Install the wasmCloud v1 operator (wasmcloud-operator) on Kubernetes")
@@ -102,6 +104,13 @@ async fn main() -> Result<()> {
                 .conflicts_with_all(&["dry-run", "uninstall", "upgrade", "status"])
         )
         .arg(
+            Arg::new("with-deps")
+                .long("with-deps")
+                .help("Also install NATS and wadm with helm into the same cluster (or, with --uninstall, remove the ones forge installed)")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&["upgrade", "status", "doctor"])
+        )
+        .arg(
             Arg::new("output")
                 .short('o')
                 .long("output")
@@ -137,9 +146,13 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
     let upgrade = matches.get_flag("upgrade");
     let status = matches.get_flag("status");
     let doctor = matches.get_flag("doctor");
+    let with_deps = matches.get_flag("with-deps");
     let output = matches.get_one::<String>("output").unwrap().as_str();
 
     match output {
+        "yaml" if with_deps => {
+            return Err(InstallerError::ValidationError("--with-deps installs helm charts, so it can't be rendered with --output yaml".to_string()).into());
+        }
         "json" if !(status || doctor) => {
             return Err(InstallerError::ValidationError("--output json is only supported with --status or --doctor".to_string()).into());
         }
@@ -169,14 +182,27 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
 
     // Step 1: Load kubeconfig
     let config = load_kubeconfig(kubeconfig_path, quiet).await?;
-    
+
     // Step 2: Create Kubernetes client
     let kube_client = create_kube_client(&config, kubeconfig_path, quiet).await?;
+
+    let deps = if with_deps {
+        let path = match kubeconfig_path {
+            Some(path) => PathBuf::from(path),
+            None => default_kubeconfig_path()?,
+        };
+        Some(Dependencies::new(kube_client.client(), &path, &config.current_context, timeout))
+    } else {
+        None
+    };
 
     // Step 3: Determine operation mode
     if uninstall {
         // Uninstall operation
         uninstall_operator(&kube_client, namespace).await?;
+        if let Some(deps) = &deps {
+            deps.uninstall().await?;
+        }
         return Ok(());
     } else if upgrade {
         // Upgrade operation
@@ -203,12 +229,20 @@ async fn run(matches: clap::ArgMatches) -> Result<()> {
         warn!("Skipping validation checks as requested");
     }
 
-    // Step 5: Install Wasmcloud operator
+    // Step 5: Install NATS and wadm first, so the operator's hosts have something to connect to
+    if let Some(deps) = &deps {
+        deps.install(dry_run).await?;
+    }
+
+    // Step 6: Install Wasmcloud operator
     let installer = install_operator(&kube_client, namespace, dry_run, timeout).await?;
 
-    // Step 6: Show installation summary
+    // Step 7: Show installation summary
     if !dry_run {
         installer.print_installation_summary().await?;
+        if deps.is_some() && !run_doctor(&kube_client, namespace, false).await? {
+            std::process::exit(1);
+        }
     } else {
         println!();
         println!("{}", "✓ Dry run completed successfully!".green().bold());

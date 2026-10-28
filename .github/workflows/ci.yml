@@ -120,13 +120,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary_name: wasmForge
+            binary_name: forge
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: wasmForge.exe
+            binary_name: forge.exe
           - os: macOS-latest
             target: x86_64-apple-darwin
-            binary_name: wasmForge
+            binary_name: forge
 
     steps:
     - name: Checkout sources
@@ -161,5 +161,5 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: wasmForge-${{ matrix.os }}
+        name: forge-${{ matrix.os }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}

@@ -241,7 +241,7 @@ pub fn common_labels() -> BTreeMap<String, String> {
     labels.insert("app.kubernetes.io/name".to_string(), "wasmcloud-operator".to_string());
     labels.insert("app.kubernetes.io/component".to_string(), "operator".to_string());
     labels.insert("app.kubernetes.io/part-of".to_string(), "wasmcloud".to_string());
-    labels.insert("app.kubernetes.io/managed-by".to_string(), "wasmForge".to_string());
+    labels.insert("app.kubernetes.io/managed-by".to_string(), "forge".to_string());
     labels
 }
 
